@@ -300,12 +300,10 @@ function Library:CreateWindow(opts)
         local t = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
             BackgroundColor3 = C.Card, BorderSizePixel = 0, LayoutOrder = toastN }, toastHolder)
         corner(t, 8)
-        stroke(t)
+        stroke(t, o.Color or C.Accent) -- กรอบสีแทนแถบด้านข้าง (แถบเดิมยืดผิดขนาด)
         new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 10),
             PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14) }, t)
         new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, t)
-        new("Frame", { Size = UDim2.new(0, 3, 1, 0), Position = UDim2.new(0, -14, 0, 0),
-            BackgroundColor3 = o.Color or C.Accent, BorderSizePixel = 0 }, t)
         new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
             Font = F.Medium, TextSize = 13, TextColor3 = C.Text, TextXAlignment = Enum.TextXAlignment.Left,
             TextWrapped = true, Text = o.Title or "", LayoutOrder = 1 }, t)
