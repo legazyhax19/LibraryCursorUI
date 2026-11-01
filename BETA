@@ -23,7 +23,7 @@ local TweenService = game:GetService("TweenService")
 local player = Players.LocalPlayer
 
 local Library = {}
-Library.Version = "0.1.0-beta"
+Library.Version = "0.2.0-beta"
 
 ---------------------------------------------------------------------
 -- ธีม
@@ -178,6 +178,85 @@ function Library:CreateWindow(opts)
         if input.KeyCode == toggleKey and win.Parent then Window:Toggle() end
     end))
 
+    -- ปุ่มลอยสำหรับซ่อน/แสดง (ลากย้ายได้ · ใช้ได้ทั้งคอมและมือถือ)
+    if opts.ToggleButton ~= false then
+        local fb = new("TextButton", { Name = "ToggleButton", Size = UDim2.fromOffset(42, 42),
+            Position = UDim2.new(0, 16, 0.5, -21), BackgroundColor3 = C.Sidebar, BorderSizePixel = 0,
+            Font = F.Medium, TextSize = 16, TextColor3 = C.Text, AutoButtonColor = false,
+            Text = opts.ToggleText or string.sub(title, 1, 1) }, gui)
+        corner(fb, 21)
+        stroke(fb, C.Accent)
+        local down, moved, startIn, startPos
+        fb.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                down, moved, startIn, startPos = true, false, input.Position, fb.Position
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End and down then
+                        down = false
+                        if not moved then Window:Toggle() end
+                    end
+                end)
+            end
+        end)
+        table.insert(Window._conns, UserInputService.InputChanged:Connect(function(input)
+            if down and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                local d = input.Position - startIn
+                if d.Magnitude > 6 then moved = true end
+                if moved then
+                    fb.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+                end
+            end
+        end))
+        Window.ToggleButton = fb
+    end
+
+    -- ชั้นสำหรับ popup (dropdown) — กดที่อื่นเพื่อปิด
+    local overlay = new("TextButton", { Name = "PopupOverlay", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+        Text = "", AutoButtonColor = false, ZIndex = 50, Visible = false }, win)
+    local popup
+    local function closePopup()
+        overlay.Visible = false
+        if popup then popup:Destroy() popup = nil end
+    end
+    overlay.MouseButton1Click:Connect(closePopup)
+    Window._closePopup = closePopup
+
+    -- เปิดรายการให้เลือก ใต้ปุ่ม anchor
+    function Window:_openList(anchor, options, current, onPick)
+        closePopup()
+        local rowH, maxH = 26, 220
+        local h = math.min(#options * rowH + 8, maxH)
+        local w = math.max(anchor.AbsoluteSize.X, 140)
+        local rel = anchor.AbsolutePosition - win.AbsolutePosition
+        local y = rel.Y + anchor.AbsoluteSize.Y + 4
+        if y + h > win.AbsoluteSize.Y - 6 then y = math.max(6, rel.Y - h - 4) end
+        local x = math.min(rel.X + anchor.AbsoluteSize.X - w, win.AbsoluteSize.X - w - 6)
+        popup = new("ScrollingFrame", { Size = UDim2.fromOffset(w, h), Position = UDim2.fromOffset(x, y),
+            BackgroundColor3 = C.Card, BorderSizePixel = 0, ZIndex = 51, ScrollBarThickness = 3,
+            ScrollBarImageColor3 = C.Faint, CanvasSize = UDim2.fromOffset(0, #options * rowH + 8) }, win)
+        corner(popup, 6)
+        stroke(popup)
+        new("UIPadding", { PaddingTop = UDim.new(0, 4), PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }, popup)
+        new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, popup)
+        for i, opt in ipairs(options) do
+            local sel = opt == current
+            local b = new("TextButton", { Size = UDim2.new(1, 0, 0, rowH), BackgroundColor3 = C.Hover,
+                BackgroundTransparency = sel and 0 or 1, BorderSizePixel = 0, AutoButtonColor = false,
+                Text = "", ZIndex = 52, LayoutOrder = i }, popup)
+            corner(b, 4)
+            new("TextLabel", { Size = UDim2.new(1, -16, 1, 0), Position = UDim2.fromOffset(8, 0), BackgroundTransparency = 1,
+                Font = F.Mono, TextSize = 12, TextColor3 = sel and C.Accent or C.Text, ZIndex = 53,
+                TextXAlignment = Enum.TextXAlignment.Left, Text = (sel and "> " or "  ") .. tostring(opt) }, b)
+            b.MouseEnter:Connect(function() b.BackgroundTransparency = 0 end)
+            b.MouseLeave:Connect(function() if not sel then b.BackgroundTransparency = 1 end end)
+            b.MouseButton1Click:Connect(function()
+                closePopup()
+                onPick(opt, i)
+            end)
+        end
+        overlay.Visible = true
+    end
+
     -- ลาก
     do
         local dragging, startPos, startInput
@@ -248,6 +327,7 @@ function Library:CreateWindow(opts)
         end
         if type(page) ~= "table" then return end
         Window.Current = page
+        if Window._closePopup then Window._closePopup() end
         for _, p in ipairs(Window.Pages) do
             local on = (p == page)
             p.Frame.Visible = on
@@ -488,9 +568,11 @@ function Library:CreateWindow(opts)
                 end
                 b.MouseButton1Click:Connect(function()
                     if #options == 0 then return end
-                    index = index % #options + 1
-                    render()
-                    safeCall(o.Callback, options[index])
+                    Window:_openList(b, options, options[index], function(_, i)
+                        index = i
+                        render()
+                        safeCall(o.Callback, options[index])
+                    end)
                 end)
                 render()
                 return D
@@ -666,7 +748,9 @@ return Library
 
 --[[ ================================ README ================================
 
-Library:CreateWindow({ Title, Size = Vector2, SidebarWidth, ToggleKey }) -> Window
+Library:CreateWindow({ Title, Size = Vector2, SidebarWidth, ToggleKey,
+                       ToggleButton = true, ToggleText = "W" }) -> Window
+    (ToggleButton = ปุ่มกลมลอยสำหรับซ่อน/แสดง ลากย้ายได้ · ปิดด้วย ToggleButton = false)
     Window:AddPage({ Title }) -> Page          (หรือ Window:AddPage("Title"))
     Window:SelectPage(Page | "Title")
     Window:SetHeaderStatus(richText)           ข้อความมุมขวาบน
@@ -697,6 +781,7 @@ Section
     :AddLabel({ Title, Description, Value })                              -> :Set(text)
     :AddInput({ Title, Description, Default, Placeholder, Width, EnterOnly, Callback(text) }) -> :Set :Get
     :AddDropdown({ Title, Description, Options, Default, Width, Callback(value) }) -> :Set :Get :SetOptions
+        (กดแล้วขึ้นรายการทั้งหมดให้เลือก)
 
 Library.Colors / Library.Fonts / Library.Escape(s) / Library.Hex(color3) / Library.Color(text, color3)
 ========================================================================== ]]
