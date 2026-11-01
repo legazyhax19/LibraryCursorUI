@@ -1,1 +1,702 @@
+--[[
+    CursorUI — UI library สไตล์แอป Cursor / VS Code สำหรับ Roblox
 
+    วิธีโหลด:
+        local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/legazyhax19/LibraryCursorUI/refs/heads/main/BETA"))()
+
+    ตัวอย่าง:
+        local Window = Library:CreateWindow({ Title = "My Script", ToggleKey = Enum.KeyCode.RightControl })
+        local Page = Window:AddPage({ Title = "Main" })
+        local Sec = Page:AddSection("General")
+        Sec:AddToggle({ Title = "Auto farm", Description = "ฟาร์มอัตโนมัติ", Default = false,
+            Callback = function(on) print(on) end })
+        Sec:AddStepper({ Title = "Speed", Default = 16, Step = 1, Min = 1, Max = 100,
+            Callback = function(v) print(v) end })
+        Sec:AddButton({ Title = "Reset", ButtonText = "Reset", Callback = function() end })
+
+    API ทั้งหมดอยู่ท้ายไฟล์ (README)
+]]
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local player = Players.LocalPlayer
+
+local Library = {}
+Library.Version = "0.1.0-beta"
+
+---------------------------------------------------------------------
+-- ธีม
+---------------------------------------------------------------------
+Library.Colors = {
+    Background = Color3.fromRGB(24, 24, 24),
+    Sidebar    = Color3.fromRGB(31, 31, 31),
+    Card       = Color3.fromRGB(37, 37, 38),
+    Hover      = Color3.fromRGB(42, 45, 46),
+    Border     = Color3.fromRGB(48, 48, 48),
+    Text       = Color3.fromRGB(230, 230, 230),
+    SubText    = Color3.fromRGB(150, 150, 150),
+    Faint      = Color3.fromRGB(95, 95, 95),
+    Accent     = Color3.fromRGB(0, 120, 212),
+    Off        = Color3.fromRGB(70, 70, 70),
+    Green      = Color3.fromRGB(35, 209, 139),
+    Red        = Color3.fromRGB(241, 76, 76),
+    Yellow     = Color3.fromRGB(229, 192, 123),
+    Blue       = Color3.fromRGB(59, 142, 234),
+    Cyan       = Color3.fromRGB(41, 184, 219),
+    Magenta    = Color3.fromRGB(214, 112, 214),
+}
+Library.Fonts = {
+    Regular = Enum.Font.Gotham,
+    Medium  = Enum.Font.GothamMedium,
+    Mono    = Enum.Font.Code,
+}
+
+local C = Library.Colors
+local F = Library.Fonts
+local TWEEN = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+---------------------------------------------------------------------
+-- ตัวช่วย
+---------------------------------------------------------------------
+local function new(class, props, parent)
+    local o = Instance.new(class)
+    for k, v in pairs(props or {}) do o[k] = v end
+    if parent then o.Parent = parent end
+    return o
+end
+local function corner(p, r) return new("UICorner", { CornerRadius = UDim.new(0, r or 6) }, p) end
+local function stroke(p, col)
+    return new("UIStroke", { Color = col or C.Border, Thickness = 1,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, p)
+end
+local function tween(o, props) TweenService:Create(o, TWEEN, props):Play() end
+
+function Library.Escape(s)
+    return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+end
+function Library.Hex(c)
+    return string.format("#%02x%02x%02x", math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+end
+function Library.Color(text, col)
+    return '<font color="' .. Library.Hex(col) .. '">' .. text .. '</font>'
+end
+local esc = Library.Escape
+
+local function safeCall(cb, ...)
+    if cb then
+        local ok, err = pcall(cb, ...)
+        if not ok then warn("[CursorUI] callback error:", err) end
+    end
+end
+
+local function getParent()
+    local ok, p = pcall(function() return (gethui and gethui()) or game:GetService("CoreGui") end)
+    if ok and p then return p end
+    return player:WaitForChild("PlayerGui")
+end
+
+local registry = (getgenv and getgenv()) or _G
+registry.CursorUIWindows = registry.CursorUIWindows or {}
+
+---------------------------------------------------------------------
+-- Window
+---------------------------------------------------------------------
+function Library:CreateWindow(opts)
+    opts = opts or {}
+    local title = opts.Title or "CursorUI"
+    local size = opts.Size or Vector2.new(660, 430)
+    local sideWidth = opts.SidebarWidth or 160
+    local toggleKey = opts.ToggleKey or Enum.KeyCode.RightControl
+
+    -- ปิดหน้าต่างชื่อเดียวกันที่เปิดค้างไว้ (กันรันซ้อน)
+    local old = registry.CursorUIWindows[title]
+    if old then pcall(function() old:Destroy() end) end
+
+    local Window = { Pages = {}, _conns = {}, _alive = true }
+    registry.CursorUIWindows[title] = Window
+
+    local gui = new("ScreenGui", { Name = "CursorUI_" .. title, ResetOnSpawn = false, IgnoreGuiInset = true,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999 })
+    pcall(function() if syn and syn.protect_gui then syn.protect_gui(gui) end end)
+    local okParent = pcall(function() gui.Parent = getParent() end)
+    if not okParent or not gui.Parent then gui.Parent = player:WaitForChild("PlayerGui") end
+    Window.Gui = gui
+
+    local win = new("Frame", { Name = "Window", Size = UDim2.fromOffset(size.X, size.Y),
+        Position = UDim2.new(0.5, -size.X / 2, 0.5, -size.Y / 2),
+        BackgroundColor3 = C.Background, BorderSizePixel = 0, ClipsDescendants = true }, gui)
+    corner(win, 10)
+    stroke(win)
+    Window.Frame = win
+
+    -- แถบชื่อ
+    local titleBar = new("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = C.Sidebar, BorderSizePixel = 0 }, win)
+    new("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = C.Border,
+        BorderSizePixel = 0 }, titleBar)
+    local dots = {}
+    for i, col in ipairs({ Color3.fromRGB(255, 95, 87), Color3.fromRGB(254, 188, 46), Color3.fromRGB(40, 200, 64) }) do
+        local d = new("TextButton", { Size = UDim2.fromOffset(12, 12), Position = UDim2.fromOffset(12 + (i - 1) * 20, 12),
+            BackgroundColor3 = col, BorderSizePixel = 0, Text = "", AutoButtonColor = false }, titleBar)
+        corner(d, 6)
+        dots[i] = d
+    end
+    new("TextLabel", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Font = F.Medium, TextSize = 13,
+        TextColor3 = C.SubText, Text = title }, titleBar)
+    local headStatus = new("TextLabel", { Size = UDim2.new(0, 220, 1, 0), Position = UDim2.new(1, -232, 0, 0),
+        BackgroundTransparency = 1, Font = F.Regular, TextSize = 12, TextColor3 = C.SubText, RichText = true,
+        TextXAlignment = Enum.TextXAlignment.Right, Text = "" }, titleBar)
+
+    -- ซ้าย
+    local side = new("Frame", { Size = UDim2.new(0, sideWidth, 1, -36), Position = UDim2.fromOffset(0, 36),
+        BackgroundColor3 = C.Sidebar, BorderSizePixel = 0 }, win)
+    new("Frame", { Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0), BackgroundColor3 = C.Border,
+        BorderSizePixel = 0 }, side)
+    local nav = new("Frame", { Size = UDim2.new(1, -16, 1, -16), Position = UDim2.fromOffset(8, 10),
+        BackgroundTransparency = 1 }, side)
+    new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, nav)
+
+    local content = new("Frame", { Size = UDim2.new(1, -sideWidth, 1, -36), Position = UDim2.fromOffset(sideWidth, 36),
+        BackgroundTransparency = 1 }, win)
+
+    -- ย่อ / ซ่อน
+    local minimized = false
+    function Window:Minimize()
+        minimized = not minimized
+        side.Visible = not minimized
+        content.Visible = not minimized
+        win.Size = minimized and UDim2.fromOffset(size.X, 36) or UDim2.fromOffset(size.X, size.Y)
+    end
+    function Window:SetVisible(v) win.Visible = v end
+    function Window:Toggle() win.Visible = not win.Visible end
+    dots[2].MouseButton1Click:Connect(function() Window:Minimize() end)
+    dots[3].MouseButton1Click:Connect(function() Window:Minimize() end)
+    dots[1].MouseButton1Click:Connect(function()
+        if Window.OnClose then safeCall(Window.OnClose) else Window:Destroy() end
+    end)
+    table.insert(Window._conns, UserInputService.InputBegan:Connect(function(input, gp)
+        if input.KeyCode == toggleKey and win.Parent then Window:Toggle() end
+    end))
+
+    -- ลาก
+    do
+        local dragging, startPos, startInput
+        titleBar.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging, startInput, startPos = true, input.Position, win.Position
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then dragging = false end
+                end)
+            end
+        end)
+        table.insert(Window._conns, UserInputService.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                local d = input.Position - startInput
+                win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end))
+    end
+
+    function Window:SetHeaderStatus(rich) headStatus.Text = rich or "" end
+
+    function Window:Destroy()
+        if not Window._alive then return end
+        Window._alive = false
+        for _, c in ipairs(Window._conns) do pcall(function() c:Disconnect() end) end
+        pcall(function() gui:Destroy() end)
+        if registry.CursorUIWindows[title] == Window then registry.CursorUIWindows[title] = nil end
+        safeCall(Window.OnDestroy)
+    end
+    function Window:IsAlive() return Window._alive and gui.Parent ~= nil end
+
+    -- แจ้งเตือนมุมขวาล่าง
+    local toastHolder = new("Frame", { Size = UDim2.new(0, 280, 1, -20), Position = UDim2.new(1, -290, 0, 10),
+        BackgroundTransparency = 1 }, gui)
+    new("UIListLayout", { Padding = UDim.new(0, 6), VerticalAlignment = Enum.VerticalAlignment.Bottom,
+        SortOrder = Enum.SortOrder.LayoutOrder }, toastHolder)
+    local toastN = 0
+    function Window:Notify(o)
+        o = type(o) == "table" and o or { Title = tostring(o) }
+        toastN += 1
+        local t = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundColor3 = C.Card, BorderSizePixel = 0, LayoutOrder = toastN }, toastHolder)
+        corner(t, 8)
+        stroke(t)
+        new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 10),
+            PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14) }, t)
+        new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, t)
+        new("Frame", { Size = UDim2.new(0, 3, 1, 0), Position = UDim2.new(0, -14, 0, 0),
+            BackgroundColor3 = o.Color or C.Accent, BorderSizePixel = 0 }, t)
+        new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+            Font = F.Medium, TextSize = 13, TextColor3 = C.Text, TextXAlignment = Enum.TextXAlignment.Left,
+            TextWrapped = true, Text = o.Title or "", LayoutOrder = 1 }, t)
+        if o.Content then
+            new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+                Font = F.Regular, TextSize = 12, TextColor3 = C.SubText, TextXAlignment = Enum.TextXAlignment.Left,
+                TextWrapped = true, Text = o.Content, LayoutOrder = 2 }, t)
+        end
+        task.delay(o.Duration or 4, function() pcall(function() t:Destroy() end) end)
+    end
+
+    -----------------------------------------------------------------
+    -- Page
+    -----------------------------------------------------------------
+    local pageOrder = 0
+    function Window:SelectPage(page)
+        if type(page) == "string" then
+            for _, p in ipairs(Window.Pages) do if p.Title == page then page = p break end end
+        end
+        if type(page) ~= "table" then return end
+        Window.Current = page
+        for _, p in ipairs(Window.Pages) do
+            local on = (p == page)
+            p.Frame.Visible = on
+            p._btn.BackgroundTransparency = on and 0 or 1
+            p._label.TextColor3 = on and C.Text or C.SubText
+            p._bar.Visible = on
+        end
+        safeCall(page.OnShow)
+        safeCall(Window.OnPageChanged, page)
+    end
+
+    function Window:AddPage(o)
+        o = type(o) == "table" and o or { Title = tostring(o) }
+        pageOrder += 1
+        local Page = { Title = o.Title or ("Page " .. pageOrder), _order = 0 }
+
+        local btn = new("TextButton", { Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = C.Hover,
+            BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false,
+            LayoutOrder = pageOrder }, nav)
+        corner(btn, 5)
+        Page._bar = new("Frame", { Size = UDim2.new(0, 2, 0, 14), Position = UDim2.new(0, 0, 0.5, -7),
+            BackgroundColor3 = C.Accent, BorderSizePixel = 0, Visible = false }, btn)
+        Page._label = new("TextLabel", { Size = UDim2.new(1, -20, 1, 0), Position = UDim2.fromOffset(12, 0),
+            BackgroundTransparency = 1, Font = F.Regular, TextSize = 13, TextColor3 = C.SubText,
+            TextXAlignment = Enum.TextXAlignment.Left, Text = Page.Title }, btn)
+        Page._btn = btn
+        btn.MouseButton1Click:Connect(function() Window:SelectPage(Page) end)
+
+        local frame = new("ScrollingFrame", { Size = UDim2.new(1, -24, 1, -16), Position = UDim2.fromOffset(12, 8),
+            BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4, ScrollBarImageColor3 = C.Faint,
+            CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, Visible = false }, content)
+        new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, frame)
+        new("UIPadding", { PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 12), PaddingRight = UDim.new(0, 6) }, frame)
+        Page.Frame = frame
+
+        local function nextOrder()
+            Page._order += 1
+            return Page._order
+        end
+
+        -- หัวข้อเล็ก
+        local function header(text)
+            return new("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Font = F.Medium,
+                TextSize = 12, TextColor3 = C.SubText, TextXAlignment = Enum.TextXAlignment.Left,
+                Text = string.upper(text), LayoutOrder = nextOrder() }, frame)
+        end
+
+        local function card(height)
+            local c = new("Frame", { Size = UDim2.new(1, 0, 0, height or 0),
+                AutomaticSize = height and Enum.AutomaticSize.None or Enum.AutomaticSize.Y,
+                BackgroundColor3 = C.Card, BorderSizePixel = 0, LayoutOrder = nextOrder() }, frame)
+            corner(c, 8)
+            stroke(c)
+            return c
+        end
+
+        -------------------------------------------------------------
+        -- Section: กลุ่มแถว (toggle / stepper / button / label / input / dropdown)
+        -------------------------------------------------------------
+        function Page:AddSection(text)
+            if text and text ~= "" then header(text) end
+            local box = card()
+            new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, box)
+            local Section = { Frame = box, _rows = 0 }
+
+            local function row(title, desc, height)
+                Section._rows += 1
+                local r = new("Frame", { Size = UDim2.new(1, 0, 0, height or (desc and 52 or 40)),
+                    BackgroundTransparency = 1, LayoutOrder = Section._rows }, box)
+                if Section._rows > 1 then
+                    new("Frame", { Size = UDim2.new(1, -24, 0, 1), Position = UDim2.fromOffset(12, 0),
+                        BackgroundColor3 = C.Border, BorderSizePixel = 0 }, r)
+                end
+                local t = new("TextLabel", { Size = UDim2.new(1, -160, 0, 18), Position = UDim2.fromOffset(14, desc and 9 or 11),
+                    BackgroundTransparency = 1, Font = F.Regular, TextSize = 13, TextColor3 = C.Text,
+                    TextXAlignment = Enum.TextXAlignment.Left, Text = title or "" }, r)
+                local d
+                if desc then
+                    d = new("TextLabel", { Size = UDim2.new(1, -160, 0, 16), Position = UDim2.fromOffset(14, 28),
+                        BackgroundTransparency = 1, Font = F.Regular, TextSize = 11, TextColor3 = C.SubText,
+                        TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Text = desc }, r)
+                end
+                return r, t, d
+            end
+
+            -- Toggle
+            function Section:AddToggle(o)
+                local r, t, d = row(o.Title, o.Description)
+                local value = o.Default and true or false
+                local sw = new("TextButton", { Size = UDim2.fromOffset(38, 20), Position = UDim2.new(1, -52, 0.5, -10),
+                    BackgroundColor3 = C.Off, BorderSizePixel = 0, Text = "", AutoButtonColor = false }, r)
+                corner(sw, 10)
+                local knob = new("Frame", { Size = UDim2.fromOffset(16, 16), Position = UDim2.fromOffset(2, 2),
+                    BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, sw)
+                corner(knob, 8)
+                local T = { Frame = r }
+                local function render(instant)
+                    local pos = value and UDim2.fromOffset(20, 2) or UDim2.fromOffset(2, 2)
+                    local col = value and C.Accent or C.Off
+                    if instant then knob.Position, sw.BackgroundColor3 = pos, col
+                    else tween(knob, { Position = pos }) tween(sw, { BackgroundColor3 = col }) end
+                end
+                function T:Set(v, silent)
+                    value = v and true or false
+                    render(false)
+                    if not silent then safeCall(o.Callback, value) end
+                end
+                function T:Get() return value end
+                function T:SetTitle(s) t.Text = s end
+                function T:SetDescription(s) if d then d.Text = s end end
+                sw.MouseButton1Click:Connect(function() T:Set(not value) end)
+                render(true)
+                return T
+            end
+
+            -- Stepper  [-] ค่า [+]
+            function Section:AddStepper(o)
+                local r, t, d = row(o.Title, o.Description)
+                local step, minV, maxV = o.Step or 1, o.Min or -math.huge, o.Max or math.huge
+                local value = o.Default
+                local box2 = new("Frame", { Size = UDim2.fromOffset(112, 26), Position = UDim2.new(1, -126, 0.5, -13),
+                    BackgroundColor3 = C.Background, BorderSizePixel = 0 }, r)
+                corner(box2, 5)
+                stroke(box2)
+                local minus = new("TextButton", { Size = UDim2.fromOffset(28, 26), BackgroundTransparency = 1,
+                    Font = F.Medium, TextSize = 15, TextColor3 = C.SubText, Text = "-" }, box2)
+                local plus = new("TextButton", { Size = UDim2.fromOffset(28, 26), Position = UDim2.new(1, -28, 0, 0),
+                    BackgroundTransparency = 1, Font = F.Medium, TextSize = 15, TextColor3 = C.SubText, Text = "+" }, box2)
+                local val = new("TextLabel", { Size = UDim2.new(1, -56, 1, 0), Position = UDim2.fromOffset(28, 0),
+                    BackgroundTransparency = 1, Font = F.Mono, TextSize = 13, TextColor3 = C.Text, Text = "" }, box2)
+                local S = { Frame = r }
+                local function render()
+                    if value == nil then
+                        val.Text, val.TextColor3 = o.NilText or "off", C.Faint
+                    else
+                        val.Text = o.Format and string.format(o.Format, value) or tostring(value)
+                        val.TextColor3 = C.Text
+                    end
+                end
+                function S:Set(v, silent)
+                    if v ~= nil then v = math.clamp(v, minV, maxV) end
+                    value = v
+                    render()
+                    if not silent then safeCall(o.Callback, value) end
+                end
+                function S:Get() return value end
+                function S:SetTitle(s) t.Text = s end
+                local function change(dir)
+                    local v = value
+                    if v == nil then
+                        v = dir > 0 and minV or nil
+                    else
+                        v = math.floor((v + step * dir) / step + 0.5) * step
+                        if v < minV then v = o.AllowNil and nil or minV end
+                        if v and v > maxV then v = maxV end
+                    end
+                    S:Set(v)
+                end
+                minus.MouseButton1Click:Connect(function() change(-1) end)
+                plus.MouseButton1Click:Connect(function() change(1) end)
+                render()
+                return S
+            end
+
+            -- Button
+            function Section:AddButton(o)
+                local r, t = row(o.Title, o.Description)
+                local b = new("TextButton", { Size = UDim2.fromOffset(o.Width or 90, 26),
+                    Position = UDim2.new(1, -(o.Width or 90) - 14, 0.5, -13), BackgroundColor3 = o.Color or C.Off,
+                    BorderSizePixel = 0, Font = F.Medium, TextSize = 12, TextColor3 = Color3.new(1, 1, 1),
+                    Text = o.ButtonText or "Run", AutoButtonColor = true }, r)
+                corner(b, 6)
+                b.MouseButton1Click:Connect(function() safeCall(o.Callback) end)
+                local B = { Frame = r, Button = b }
+                function B:SetText(s) b.Text = s end
+                function B:SetColor(c) b.BackgroundColor3 = c end
+                function B:SetTitle(s) t.Text = s end
+                return B
+            end
+
+            -- Label (ข้อความ / ค่าด้านขวา)
+            function Section:AddLabel(o)
+                o = type(o) == "table" and o or { Title = tostring(o) }
+                local r, t, d = row(o.Title, o.Description)
+                local v = new("TextLabel", { Size = UDim2.new(0, 140, 1, 0), Position = UDim2.new(1, -154, 0, 0),
+                    BackgroundTransparency = 1, Font = F.Mono, TextSize = 12, TextColor3 = C.SubText, RichText = true,
+                    TextXAlignment = Enum.TextXAlignment.Right, Text = o.Value or "" }, r)
+                local L = { Frame = r }
+                function L:Set(s) v.Text = tostring(s) end
+                function L:SetTitle(s) t.Text = s end
+                function L:SetDescription(s) if d then d.Text = s end end
+                return L
+            end
+
+            -- Input (ช่องพิมพ์)
+            function Section:AddInput(o)
+                local r, t = row(o.Title, o.Description)
+                local box3 = new("TextBox", { Size = UDim2.fromOffset(o.Width or 140, 26),
+                    Position = UDim2.new(1, -(o.Width or 140) - 14, 0.5, -13), BackgroundColor3 = C.Background,
+                    BorderSizePixel = 0, Font = F.Mono, TextSize = 12, TextColor3 = C.Text, ClearTextOnFocus = false,
+                    PlaceholderText = o.Placeholder or "", PlaceholderColor3 = C.Faint, Text = o.Default or "" }, r)
+                corner(box3, 5)
+                stroke(box3)
+                new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, box3)
+                box3.FocusLost:Connect(function(enter)
+                    if enter or not o.EnterOnly then safeCall(o.Callback, box3.Text) end
+                end)
+                local I = { Frame = r, Box = box3 }
+                function I:Set(s) box3.Text = tostring(s) end
+                function I:Get() return box3.Text end
+                return I
+            end
+
+            -- Dropdown (กดเพื่อวนตัวเลือก)
+            function Section:AddDropdown(o)
+                local r, t = row(o.Title, o.Description)
+                local options = o.Options or {}
+                local index = 1
+                for i, v in ipairs(options) do if v == o.Default then index = i end end
+                local b = new("TextButton", { Size = UDim2.fromOffset(o.Width or 140, 26),
+                    Position = UDim2.new(1, -(o.Width or 140) - 14, 0.5, -13), BackgroundColor3 = C.Background,
+                    BorderSizePixel = 0, Font = F.Mono, TextSize = 12, TextColor3 = C.Text, Text = "",
+                    AutoButtonColor = true }, r)
+                corner(b, 5)
+                stroke(b)
+                local D = { Frame = r }
+                local function render() b.Text = tostring(options[index] or "-") .. "  v" end
+                function D:Set(v, silent)
+                    for i, x in ipairs(options) do if x == v then index = i end end
+                    render()
+                    if not silent then safeCall(o.Callback, options[index]) end
+                end
+                function D:Get() return options[index] end
+                function D:SetOptions(list)
+                    options = list or {}
+                    index = math.clamp(index, 1, math.max(1, #options))
+                    render()
+                end
+                b.MouseButton1Click:Connect(function()
+                    if #options == 0 then return end
+                    index = index % #options + 1
+                    render()
+                    safeCall(o.Callback, options[index])
+                end)
+                render()
+                return D
+            end
+
+            return Section
+        end
+
+        -------------------------------------------------------------
+        -- Status card: สถานะ + ข้อมูล + ปุ่มใหญ่
+        -------------------------------------------------------------
+        function Page:AddStatusCard(o)
+            o = o or {}
+            if o.Header then header(o.Header) end
+            local c = card(o.Height or 118)
+            local dot = new("Frame", { Size = UDim2.fromOffset(10, 10), Position = UDim2.fromOffset(16, 20),
+                BackgroundColor3 = C.Off, BorderSizePixel = 0 }, c)
+            corner(dot, 5)
+            local state = new("TextLabel", { Size = UDim2.new(1, -170, 0, 22), Position = UDim2.fromOffset(34, 14),
+                BackgroundTransparency = 1, Font = F.Medium, TextSize = 16, TextColor3 = C.Text,
+                TextXAlignment = Enum.TextXAlignment.Left, Text = o.State or "Idle" }, c)
+            local info = new("TextLabel", { Size = UDim2.new(1, -32, 1, -50), Position = UDim2.fromOffset(16, 42),
+                BackgroundTransparency = 1, Font = F.Mono, TextSize = 12, TextColor3 = C.SubText, RichText = true,
+                TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, Text = "" }, c)
+            local SC = { Frame = c }
+            if o.ButtonText then
+                local b = new("TextButton", { Size = UDim2.fromOffset(110, 32), Position = UDim2.new(1, -126, 0, 12),
+                    BackgroundColor3 = o.ButtonColor or C.Accent, BorderSizePixel = 0, Font = F.Medium, TextSize = 13,
+                    TextColor3 = Color3.new(1, 1, 1), Text = o.ButtonText, AutoButtonColor = true }, c)
+                corner(b, 6)
+                b.MouseButton1Click:Connect(function() safeCall(o.Callback) end)
+                function SC:SetButton(text, color)
+                    if text then b.Text = text end
+                    if color then b.BackgroundColor3 = color end
+                end
+            end
+            function SC:SetState(text, color)
+                state.Text = text
+                if color then dot.BackgroundColor3 = color end
+            end
+            function SC:SetInfo(rich) info.Text = rich end
+            return SC
+        end
+
+        -------------------------------------------------------------
+        -- List: รายการแถวที่กดได้ (ใช้กับข้อมูลที่เปลี่ยนบ่อย)
+        -------------------------------------------------------------
+        function Page:AddList(o)
+            o = o or {}
+            if o.Header then header(o.Header) end
+            local c = card()
+            new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, c)
+            new("UIPadding", { PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4) }, c)
+            local rows = {}
+            local LST = { Frame = c }
+            local function getRow(i)
+                if rows[i] then return rows[i] end
+                local b = new("TextButton", { Size = UDim2.new(1, 0, 0, o.RowHeight or 30), BackgroundColor3 = C.Hover,
+                    BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = i }, c)
+                local lbl = new("TextLabel", { Size = UDim2.new(1, -28, 1, 0), Position = UDim2.fromOffset(14, 0),
+                    BackgroundTransparency = 1, Font = F.Mono, TextSize = 12, RichText = true, TextColor3 = C.Text,
+                    TextXAlignment = Enum.TextXAlignment.Left, Text = "" }, b)
+                local entry = { btn = b, lbl = lbl, item = nil }
+                b.MouseEnter:Connect(function() if o.Clickable ~= false then b.BackgroundTransparency = 0.4 end end)
+                b.MouseLeave:Connect(function() b.BackgroundTransparency = 1 end)
+                b.MouseButton1Click:Connect(function()
+                    if entry.item and o.Clickable ~= false then safeCall(o.OnClick, entry.item.Id, entry.item) end
+                end)
+                rows[i] = entry
+                return entry
+            end
+            -- items = { { Text = "<rich text>", Id = any }, ... }
+            function LST:SetItems(items)
+                for i, it in ipairs(items) do
+                    local r = getRow(i)
+                    r.item = it
+                    r.lbl.Text = it.Text or ""
+                    r.btn.Visible = true
+                end
+                for j = #items + 1, #rows do
+                    rows[j].btn.Visible = false
+                    rows[j].item = nil
+                end
+            end
+            return LST
+        end
+
+        -------------------------------------------------------------
+        -- Log: กล่องข้อความแบบ console
+        -------------------------------------------------------------
+        function Page:AddLog(o)
+            o = o or {}
+            local maxLines = o.MaxLines or 200
+            local bar = new("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, LayoutOrder = nextOrder() }, frame)
+            new("TextLabel", { Size = UDim2.new(1, -100, 1, 0), BackgroundTransparency = 1, Font = F.Medium, TextSize = 12,
+                TextColor3 = C.SubText, TextXAlignment = Enum.TextXAlignment.Left, Text = string.upper(o.Header or "Logs") }, bar)
+            local clr = new("TextButton", { Size = UDim2.fromOffset(80, 26), Position = UDim2.new(1, -80, 0, 2),
+                BackgroundColor3 = C.Off, BorderSizePixel = 0, Font = F.Medium, TextSize = 12,
+                TextColor3 = Color3.new(1, 1, 1), Text = "Clear" }, bar)
+            corner(clr, 6)
+            local holder = card(o.Height or 300)
+            local box = new("ScrollingFrame", { Size = UDim2.new(1, -16, 1, -12), Position = UDim2.fromOffset(10, 6),
+                BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4, ScrollBarImageColor3 = C.Faint,
+                CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y }, holder)
+            new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 1) }, box)
+
+            local LOG = { Frame = holder }
+            local n, count = 0, 0
+            function LOG:Print(text, color, isRich)
+                if not Window:IsAlive() then return end
+                n += 1
+                count += 1
+                local atBottom = box.CanvasPosition.Y >= box.AbsoluteCanvasSize.Y - box.AbsoluteSize.Y - 30
+                new("TextLabel", { Size = UDim2.new(1, -6, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+                    BackgroundTransparency = 1, Font = F.Mono, TextSize = 12, RichText = true, TextWrapped = true,
+                    TextXAlignment = Enum.TextXAlignment.Left, TextColor3 = color or C.Text, LayoutOrder = n,
+                    Text = '<font color="#5f5f5f">' .. os.date("%H:%M:%S") .. '</font>  ' .. (isRich and text or esc(text)) }, box)
+                if count > maxLines then
+                    local oldest, oo
+                    for _, ch in ipairs(box:GetChildren()) do
+                        if ch:IsA("TextLabel") and (not oo or ch.LayoutOrder < oo) then oldest, oo = ch, ch.LayoutOrder end
+                    end
+                    if oldest then
+                        oldest:Destroy()
+                        count -= 1
+                    end
+                end
+                if atBottom then
+                    task.defer(function()
+                        box.CanvasPosition = Vector2.new(0, math.max(0, box.AbsoluteCanvasSize.Y - box.AbsoluteSize.Y))
+                    end)
+                end
+                safeCall(LOG.OnPrint, text, color)
+            end
+            function LOG:Clear()
+                for _, ch in ipairs(box:GetChildren()) do if ch:IsA("TextLabel") then ch:Destroy() end end
+                count = 0
+            end
+            clr.MouseButton1Click:Connect(function() LOG:Clear() end)
+            return LOG
+        end
+
+        -- หัวข้ออย่างเดียว / ข้อความยาว
+        function Page:AddHeader(text) return header(text) end
+        function Page:AddParagraph(o)
+            o = type(o) == "table" and o or { Content = tostring(o) }
+            local c = card()
+            new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 10),
+                PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14) }, c)
+            new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, c)
+            if o.Title then
+                new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+                    Font = F.Medium, TextSize = 13, TextColor3 = C.Text, TextXAlignment = Enum.TextXAlignment.Left,
+                    TextWrapped = true, Text = o.Title, LayoutOrder = 1 }, c)
+            end
+            local body = new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+                BackgroundTransparency = 1, Font = F.Regular, TextSize = 12, TextColor3 = C.SubText, RichText = true,
+                TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true, Text = o.Content or "", LayoutOrder = 2 }, c)
+            local P = { Frame = c }
+            function P:Set(s) body.Text = s end
+            return P
+        end
+
+        table.insert(Window.Pages, Page)
+        if #Window.Pages == 1 then Window:SelectPage(Page) end
+        return Page
+    end
+
+    return Window
+end
+
+return Library
+
+--[[ ================================ README ================================
+
+Library:CreateWindow({ Title, Size = Vector2, SidebarWidth, ToggleKey }) -> Window
+    Window:AddPage({ Title }) -> Page          (หรือ Window:AddPage("Title"))
+    Window:SelectPage(Page | "Title")
+    Window:SetHeaderStatus(richText)           ข้อความมุมขวาบน
+    Window:Notify({ Title, Content, Duration, Color })
+    Window:Minimize()  Window:Toggle()  Window:SetVisible(bool)
+    Window:Destroy()   Window:IsAlive()
+    Window.OnClose = function() end            กดปุ่มแดง (ถ้าไม่ตั้ง = Destroy)
+    Window.OnDestroy = function() end
+    Window.OnPageChanged = function(page) end
+
+Page
+    Page:AddSection("Title") -> Section
+    Page:AddStatusCard({ Header, State, ButtonText, ButtonColor, Height, Callback })
+        :SetState(text, dotColor)  :SetInfo(richText)  :SetButton(text, color)
+    Page:AddList({ Header, RowHeight, Clickable, OnClick = function(id, item) end })
+        :SetItems({ { Text = richText, Id = any }, ... })
+    Page:AddLog({ Header, Height, MaxLines })
+        :Print(text, color, isRich)  :Clear()   .OnPrint = function(text, color) end
+    Page:AddHeader(text)
+    Page:AddParagraph({ Title, Content }) :Set(text)
+    Page.OnShow = function() end
+
+Section
+    :AddToggle({ Title, Description, Default, Callback(bool) })          -> :Set(v, silent) :Get()
+    :AddStepper({ Title, Description, Default, Step, Min, Max, Format,
+                  AllowNil, NilText, Callback(number|nil) })             -> :Set(v, silent) :Get()
+    :AddButton({ Title, Description, ButtonText, Color, Width, Callback }) -> :SetText :SetColor
+    :AddLabel({ Title, Description, Value })                              -> :Set(text)
+    :AddInput({ Title, Description, Default, Placeholder, Width, EnterOnly, Callback(text) }) -> :Set :Get
+    :AddDropdown({ Title, Description, Options, Default, Width, Callback(value) }) -> :Set :Get :SetOptions
+
+Library.Colors / Library.Fonts / Library.Escape(s) / Library.Hex(color3) / Library.Color(text, color3)
+========================================================================== ]]
